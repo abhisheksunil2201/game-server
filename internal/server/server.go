@@ -6,6 +6,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+  "sync"
+  "github.com/gorilla/websocket"
 
 	_ "github.com/joho/godotenv/autoload"
 
@@ -14,15 +16,16 @@ import (
 
 type Server struct {
 	port int
-
-	db database.Service
+  clients map[*websocket.Conn]bool
+	mutex sync.Mutex 
+  db database.Service
 }
 
 func NewServer() *http.Server {
 	port, _ := strconv.Atoi(os.Getenv("PORT"))
 	NewServer := &Server{
 		port: port,
-
+    clients: make(map[*websocket.Conn]bool),
 		db: database.New(),
 	}
 
