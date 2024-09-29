@@ -2,29 +2,29 @@ package server
 
 import (
 	"fmt"
+	"game-server/internal/database"
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 	"time"
-  "sync"
-	"game-server/internal/database"
 
-  "github.com/gorilla/websocket"  
+	"github.com/gorilla/websocket"
 )
 
 type Server struct {
-	port int
-  clients map[*websocket.Conn]bool
-	mutex sync.Mutex 
-  db database.Service
+	port    int
+	clients map[*websocket.Conn]bool
+	mutex   sync.Mutex
+	db      database.Service
 }
 
 func NewServer() *http.Server {
 	port, _ := strconv.Atoi(os.Getenv("PORT"))
 	NewServer := &Server{
-		port: port,
-    clients: make(map[*websocket.Conn]bool),
-		db: database.New(),
+		port:    port,
+		clients: make(map[*websocket.Conn]bool),
+		db:      database.New(),
 	}
 
 	// Declare Server config
