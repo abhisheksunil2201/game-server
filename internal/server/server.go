@@ -7,11 +7,9 @@ import (
 	"strconv"
 	"time"
   "sync"
-  "github.com/gorilla/websocket"
-
-	_ "github.com/joho/godotenv/autoload"
-
 	"game-server/internal/database"
+
+  "github.com/gorilla/websocket"  
 )
 
 type Server struct {
