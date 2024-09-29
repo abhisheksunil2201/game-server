@@ -1,20 +1,20 @@
 package server
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
-  "encoding/json"
 
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 )
 
 var upgrader = websocket.Upgrader{
-  ReadBufferSize:  1024,
-  WriteBufferSize: 1024,
-  CheckOrigin: func(r *http.Request) bool {
-    return true
-  },
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+	CheckOrigin: func(r *http.Request) bool {
+		return true
+	},
 }
 
 func (s *Server) RegisterRoutes() http.Handler {
@@ -26,64 +26,64 @@ func (s *Server) RegisterRoutes() http.Handler {
 }
 
 func (s *Server) helloHandler(w http.ResponseWriter, r *http.Request) {
-  w.Write([]byte("Hello from the server"))
+	w.Write([]byte("Hello from the server"))
 }
 
-func (s *Server) websocketHandler(w http.ResponseWriter, r *http.Request){
-    log.Println("Attempting to upgrade to WebSocket...")
-    
-    ws, err := upgrader.Upgrade(w, r, nil)
-    if err != nil {
-      log.Println(err)
-      return
-    }
+func (s *Server) websocketHandler(w http.ResponseWriter, r *http.Request) {
+	log.Println("Attempting to upgrade to WebSocket...")
 
-    log.Println("WebSocket upgrade successful")
+	ws, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Println(err)
+		return
+	}
 
-    s.handleConnections(ws)
-  
+	log.Println("WebSocket upgrade successful")
+
+	s.handleConnections(ws)
+
 }
 
 func (s *Server) handleConnections(ws *websocket.Conn) {
-  s.mutex.Lock()
-  s.clients[ws] = true
-  s.mutex.Unlock()
+	s.mutex.Lock()
+	s.clients[ws] = true
+	s.mutex.Unlock()
 
-  log.Println("New client connected")
+	log.Println("New client connected")
 
-  disconnected := make(chan struct{})
-  go s.readPump(ws, disconnected)
-  <-disconnected
-  s.mutex.Lock()
-  delete(s.clients, ws)
-  s.mutex.Unlock()
+	disconnected := make(chan struct{})
+	go s.readPump(ws, disconnected)
+	<-disconnected
+	s.mutex.Lock()
+	delete(s.clients, ws)
+	s.mutex.Unlock()
 
-  log.Println("Client disconnected")
+	log.Println("Client disconnected")
 }
 
 func (s *Server) readPump(ws *websocket.Conn, disconnected chan struct{}) {
-  defer func () {
-    ws.Close()
-    close(disconnected)
-  }()
+	defer func() {
+		ws.Close()
+		close(disconnected)
+	}()
 
-  for {
+	for {
 		var msg map[string]interface{}
 		err := ws.ReadJSON(&msg)
 		if err != nil {
-      log.Printf("error on ReadJSON: %v", err)
+			log.Printf("error on ReadJSON: %v", err)
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				log.Printf("error: %v", err)
 			}
 			break
 		}
 
-    jsonData, err := json.MarshalIndent(msg, "", "  ")
-    if err != nil {
-      log.Printf("error formatting JSON: %v", err)
-    } else {
-      log.Printf("Received JSON message: %s", string(jsonData))
-    }
+		jsonData, err := json.MarshalIndent(msg, "", "  ")
+		if err != nil {
+			log.Printf("error formatting JSON: %v", err)
+		} else {
+			log.Printf("Received JSON message: %s", string(jsonData))
+		}
 
 		err = ws.WriteJSON(msg)
 		if err != nil {
