@@ -13,6 +13,9 @@ build:
 run:
 	@go run cmd/api/main.go
 
+# Run Client
+run-client:
+	@go run client/client.go
 
 # Create DB container
 docker-run:

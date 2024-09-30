@@ -1,13 +1,33 @@
 package server
 
 import (
-	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"sync"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 )
+
+type Player struct {
+	Conn *websocket.Conn
+	id   string
+}
+
+type Game struct {
+	id        string
+	Players   []*Player
+	Ticker    *time.Ticker
+	StopChan  chan struct{}
+	GameState string
+}
+
+var playerQueue = make(chan *Player, 100)
+var activeGames = make(map[string]*Game)
+var mu sync.Mutex
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
@@ -20,7 +40,9 @@ var upgrader = websocket.Upgrader{
 func (s *Server) RegisterRoutes() http.Handler {
 	r := mux.NewRouter()
 	r.HandleFunc("/", s.helloHandler)
-	r.HandleFunc("/ws", s.websocketHandler)
+	r.HandleFunc("/ws", s.PlayerConnect)
+
+	go Matchmaking()
 
 	return r
 }
@@ -29,66 +51,77 @@ func (s *Server) helloHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("Hello from the server"))
 }
 
-func (s *Server) websocketHandler(w http.ResponseWriter, r *http.Request) {
-	log.Println("Attempting to upgrade to WebSocket...")
-
+func (s *Server) PlayerConnect(w http.ResponseWriter, r *http.Request) {
 	ws, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Println(err)
+		log.Println("Error upgrading connection: ", err)
 		return
 	}
-
-	log.Println("WebSocket upgrade successful")
-
-	s.handleConnections(ws)
-
+	player := &Player{Conn: ws, id: uuid.New().String()}
+	playerQueue <- player
+	log.Printf("Player %s connected", player.id)
 }
 
-func (s *Server) handleConnections(ws *websocket.Conn) {
-	s.mutex.Lock()
-	s.clients[ws] = true
-	s.mutex.Unlock()
-
-	log.Println("New client connected")
-
-	disconnected := make(chan struct{})
-	go s.readPump(ws, disconnected)
-	<-disconnected
-	s.mutex.Lock()
-	delete(s.clients, ws)
-	s.mutex.Unlock()
-
-	log.Println("Client disconnected")
-}
-
-func (s *Server) readPump(ws *websocket.Conn, disconnected chan struct{}) {
-	defer func() {
-		ws.Close()
-		close(disconnected)
-	}()
+func Matchmaking() {
+	log.Println("********* Matchmaking active *********")
 
 	for {
-		var msg map[string]interface{}
-		err := ws.ReadJSON(&msg)
-		if err != nil {
-			log.Printf("error on ReadJSON: %v", err)
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("error: %v", err)
+		if len(playerQueue) >= 10 {
+			players := make([]*Player, 10)
+			for i := 0; i < 10; i++ {
+				players[i] = <-playerQueue
 			}
-			break
+			go StartMatch(players)
 		}
-
-		jsonData, err := json.MarshalIndent(msg, "", "  ")
-		if err != nil {
-			log.Printf("error formatting JSON: %v", err)
-		} else {
-			log.Printf("Received JSON message: %s", string(jsonData))
-		}
-
-		err = ws.WriteJSON(msg)
-		if err != nil {
-			log.Println("error writing message:", err)
-			break
-		}
+		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+func StartMatch(players []*Player) {
+	gameId := uuid.New().String()
+	stopChan := make(chan struct{})
+	ticker := time.NewTicker(16 * time.Millisecond)
+
+	game := &Game{
+		id:       gameId,
+		Players:  players,
+		Ticker:   ticker,
+		StopChan: stopChan,
+	}
+
+	// Store active game
+	mu.Lock()
+	activeGames[gameId] = game
+	mu.Unlock()
+
+	log.Printf("Starting game %s with players: %v\n", gameId, players)
+
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				game.GameState = getGameState(gameId)
+				for _, player := range players {
+					err := player.Conn.WriteJSON(game.GameState)
+					if err != nil {
+						log.Printf("Error sending message to player %s: %v", player.id, err)
+						player.Conn.Close()
+					}
+				}
+			case <-stopChan:
+				// Game close logic
+				log.Printf("Closing game %s", gameId)
+				for _, player := range players {
+					player.Conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Game over"))
+					player.Conn.Close()
+				}
+				ticker.Stop()
+				return
+			}
+		}
+	}()
+}
+
+func getGameState(gameId string) string {
+	return fmt.Sprintf("Game state %s", gameId)
 }
