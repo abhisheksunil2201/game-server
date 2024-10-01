@@ -1,7 +1,7 @@
 package server
 
 import (
-	"fmt"
+	"encoding/json"
 	"log"
 	"net/http"
 	"sync"
@@ -22,7 +22,7 @@ type Game struct {
 	Players   []*Player
 	Ticker    *time.Ticker
 	StopChan  chan struct{}
-	GameState string
+	GameState map[string]interface{}
 }
 
 var playerQueue = make(chan *Player, 100)
@@ -41,6 +41,7 @@ func (s *Server) RegisterRoutes() http.Handler {
 	r := mux.NewRouter()
 	r.HandleFunc("/", s.helloHandler)
 	r.HandleFunc("/ws", s.PlayerConnect)
+	r.HandleFunc("/close-game/{gameId}", CloseGameHandler).Methods("POST")
 
 	go Matchmaking()
 
@@ -96,6 +97,17 @@ func StartMatch(players []*Player) {
 
 	log.Printf("Starting game %s with players: %v\n", gameId, players)
 
+	for _, player := range players {
+		err := player.Conn.WriteJSON(map[string]string{
+			"gameId":  gameId,
+			"message": "Game has started",
+		})
+		if err != nil {
+			log.Printf("Error sending game Id to player %s: %v", player.id, err)
+			player.Conn.Close()
+		}
+	}
+
 	go func() {
 		for {
 			select {
@@ -104,7 +116,7 @@ func StartMatch(players []*Player) {
 				for _, player := range players {
 					err := player.Conn.WriteJSON(game.GameState)
 					if err != nil {
-						log.Printf("Error sending message to player %s: %v", player.id, err)
+						// log.Printf("Error sending message to player %s: %v", player.id, err)
 						player.Conn.Close()
 					}
 				}
@@ -122,6 +134,65 @@ func StartMatch(players []*Player) {
 	}()
 }
 
-func getGameState(gameId string) string {
-	return fmt.Sprintf("Game state %s", gameId)
+func CloseGameHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	gameId := vars["gameId"]
+	for id, game := range activeGames {
+		log.Printf("GameId: %s, State: %s", id, game.GameState)
+	}
+
+	mu.Lock()
+	_, exists := activeGames[gameId]
+	mu.Unlock()
+
+	if !exists {
+		http.Error(w, "Game not found", http.StatusNotFound)
+		return
+	}
+
+	// Close the game
+	CloseGame(gameId)
+
+	// Send response
+	response := map[string]string{
+		"message": "Game closed successfully",
+		"gameId":  gameId,
+	}
+	jsonResponse(w, response, http.StatusOK)
+}
+
+func CloseGame(gameId string) {
+	mu.Lock()
+	game, exists := activeGames[gameId]
+
+	for _, player := range game.Players {
+		player.Conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Game over"))
+		player.Conn.Close()
+	}
+
+	if exists {
+		close(game.StopChan)
+		delete(activeGames, gameId)
+		log.Printf("Game %s has been closed", gameId)
+	} else {
+		log.Printf("Game not found here")
+	}
+	mu.Unlock()
+}
+
+func getGameState(gameId string) map[string]interface{} {
+	return map[string]interface{}{
+		"gameId":  gameId,
+		"state":   "active",
+		"tick":    time.Now().Unix(),
+		"message": "Game state update",
+	}
+}
+
+func jsonResponse(w http.ResponseWriter, data interface{}, status int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		log.Printf("Error encoding JSON response: %v", err)
+	}
 }
