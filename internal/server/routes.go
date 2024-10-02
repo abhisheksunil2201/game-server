@@ -13,8 +13,9 @@ import (
 )
 
 type Player struct {
-	Conn *websocket.Conn
-	id   string
+	Conn       *websocket.Conn
+	id         string
+	LastActive time.Time
 }
 
 type Game struct {
@@ -61,6 +62,21 @@ func (s *Server) PlayerConnect(w http.ResponseWriter, r *http.Request) {
 	player := &Player{Conn: ws, id: uuid.New().String()}
 	playerQueue <- player
 	log.Printf("Player %s connected", player.id)
+
+	//For player inactivity Check
+	go func() {
+		for {
+			// Each time the player sends a message, update LastActive
+			_, _, err := ws.ReadMessage()
+			if err != nil {
+				log.Println("Error reading message:", err)
+				break
+			}
+			mu.Lock()
+			player.LastActive = time.Now() // Update activity timestamp
+			mu.Unlock()
+		}
+	}()
 }
 
 func Matchmaking() {
@@ -107,6 +123,27 @@ func StartMatch(players []*Player) {
 			player.Conn.Close()
 		}
 	}
+
+	// Periodically check for player inactivity
+	go func() {
+		inactivityTimeout := 30 * time.Second
+		for {
+			select {
+			case <-time.After(10 * time.Second): // Check every 10 seconds
+				mu.Lock()
+				for _, player := range players {
+					if time.Since(player.LastActive) > inactivityTimeout {
+						log.Printf("Player %s is inactive, disconnecting...", player.id)
+						player.Conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Disconnected due to inactivity"))
+						player.Conn.Close()
+					}
+				}
+				mu.Unlock()
+			case <-game.StopChan:
+				return
+			}
+		}
+	}()
 
 	go func() {
 		for {
