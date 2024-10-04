@@ -71,5 +71,20 @@ watch:
             fi; \
         fi
 
+minikube-docker-env:
+	@eval $$(minikube docker-env)
 
-.PHONY: all build run test clean watch
+docker-build:
+	@echo "Building Docker image..."
+	@docker build -t game-server .
+
+k8s-deploy:
+	@echo "Deploying to Kubernetes..."
+	@kubectl apply -f game-server.yaml
+
+k8s-clean:
+	@echo "Cleaning Kubernetes resources..."
+	@kubectl delete -f game-server.yaml
+
+
+.PHONY: all build run test clean watch docker-build k8s-deploy k8s-clean

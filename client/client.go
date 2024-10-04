@@ -17,19 +17,19 @@ import (
 var gameId string
 
 func main() {
-	playerCount := 10000
+	playerCount := 100
 	var wg sync.WaitGroup
 	wg.Add(playerCount)
 
-	// go func() {
-	// 	time.Sleep(3 * time.Second)
-	// 	log.Println("Closing game...")
-	// 	if gameId != "" {
-	// 		closeGame(gameId)
-	// 	} else {
-	// 		log.Println("No gameID received yet")
-	// 	}
-	// }()
+	go func() {
+		time.Sleep(3 * time.Second)
+		log.Println("Closing game...")
+		if gameId != "" {
+			closeGame(gameId)
+		} else {
+			log.Println("No gameID received yet")
+		}
+	}()
 
 	for i := 0; i < playerCount; i++ {
 		go func() {

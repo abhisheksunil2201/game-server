@@ -2,7 +2,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: game-server-deployment
+  name: game-server
 spec:
   replicas: 1
   selector:
@@ -15,7 +15,8 @@ spec:
     spec:
       containers:
       - name: game-server
-        image: your-game-server-image
+        imagePullPolicy: Never
+        image: game-server:latest
         ports:
         - containerPort: 8080
         resources:
@@ -25,3 +26,18 @@ spec:
           requests:
             cpu: "0.5"
             memory: "256Mi"
+---
+# Service to expose the game server
+apiVersion: v1
+kind: Service
+metadata:
+  name: game-server
+spec:
+  selector:
+    app: game-server
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+      nodePort: 31000
+  type: NodePort
