@@ -17,7 +17,7 @@ import (
 var gameId string
 
 func main() {
-	playerCount := 100
+	playerCount := 10
 	var wg sync.WaitGroup
 	wg.Add(playerCount)
 
