@@ -10,6 +10,7 @@ func (s *Server) RegisterRoutes() http.Handler {
 	r.HandleFunc("/", s.helloHandler)
 	r.HandleFunc("/ws", s.PlayerConnect)
 	r.HandleFunc("/close-game/{gameId}", CloseGameHandler).Methods("POST")
+	r.HandleFunc("/create-player", s.CreatePlayerHandler).Methods("POST")
 
 	go Matchmaking()
 

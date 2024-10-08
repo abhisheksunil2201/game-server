@@ -9,19 +9,15 @@ import (
 	"strconv"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "github.com/joho/godotenv/autoload"
+	_ "github.com/mattn/go-sqlite3"
 )
 
-// Service represents a service that interacts with a database.
 type Service interface {
-	// Health returns a map of health status information.
-	// The keys and values in the map are service-specific.
 	Health() map[string]string
-
-	// Close terminates the database connection.
-	// It returns an error if the connection cannot be closed.
 	Close() error
+	StorePlayer(playerId, playerName string) error
+	StoreGameHistory(gameId, players, result string) error
 }
 
 type service struct {
@@ -29,12 +25,7 @@ type service struct {
 }
 
 var (
-	database   = os.Getenv("DB_DATABASE")
-	password   = os.Getenv("DB_PASSWORD")
-	username   = os.Getenv("DB_USERNAME")
-	port       = os.Getenv("DB_PORT")
-	host       = os.Getenv("DB_HOST")
-	schema     = os.Getenv("DB_SCHEMA")
+	dburl      = os.Getenv("DB_URL")
 	dbInstance *service
 )
 
@@ -43,19 +34,49 @@ func New() Service {
 	if dbInstance != nil {
 		return dbInstance
 	}
-	connStr := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable&search_path=%s", username, password, host, port, database, schema)
-	db, err := sql.Open("pgx", connStr)
+
+	db, err := sql.Open("sqlite3", dburl)
 	if err != nil {
 		log.Fatal(err)
 	}
+
 	dbInstance = &service{
 		db: db,
 	}
+
+	createTables(db)
+
 	return dbInstance
 }
 
-// Health checks the health of the database connection by pinging the database.
-// It returns a map with keys indicating various health statistics.
+func createTables(db *sql.DB) {
+	createPlayersTable := `
+	CREATE TABLE IF NOT EXISTS players (
+		player_id TEXT PRIMARY KEY,
+		name TEXT,
+		joined_at DATETIME
+	);`
+
+	createGameHistoryTable := `
+	CREATE TABLE IF NOT EXISTS game_history (
+		game_id TEXT PRIMARY KEY,
+		players TEXT,
+		start_time DATETIME,
+		end_time DATETIME,
+		result TEXT
+	);`
+
+	_, err := db.Exec(createPlayersTable)
+	if err != nil {
+		log.Fatal("Failed to create players table:", err)
+	}
+
+	_, err = db.Exec(createGameHistoryTable)
+	if err != nil {
+		log.Fatal("Failed to create game history table:", err)
+	}
+}
+
 func (s *service) Health() map[string]string {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
@@ -67,15 +88,13 @@ func (s *service) Health() map[string]string {
 	if err != nil {
 		stats["status"] = "down"
 		stats["error"] = fmt.Sprintf("db down: %v", err)
-		log.Fatalf(fmt.Sprintf("db down: %v", err)) // Log the error and terminate the program
+		log.Fatalf(fmt.Sprintf("db down: %v", err))
 		return stats
 	}
 
-	// Database is up, add more statistics
 	stats["status"] = "up"
 	stats["message"] = "It's healthy"
 
-	// Get database stats (like open connections, in use, idle, etc.)
 	dbStats := s.db.Stats()
 	stats["open_connections"] = strconv.Itoa(dbStats.OpenConnections)
 	stats["in_use"] = strconv.Itoa(dbStats.InUse)
@@ -85,7 +104,6 @@ func (s *service) Health() map[string]string {
 	stats["max_idle_closed"] = strconv.FormatInt(dbStats.MaxIdleClosed, 10)
 	stats["max_lifetime_closed"] = strconv.FormatInt(dbStats.MaxLifetimeClosed, 10)
 
-	// Evaluate stats to provide a health message
 	if dbStats.OpenConnections > 40 {
 		stats["message"] = "The database is experiencing heavy load."
 	}
@@ -105,7 +123,22 @@ func (s *service) Health() map[string]string {
 	return stats
 }
 
+func (s *service) StorePlayer(id string, Name string) error {
+	log.Printf("Creating user %s %s", id, Name)
+	_, err := s.db.Exec(
+		`INSERT INTO players (player_id, name, joined_at) VALUES (?, ?, datetime('now'))`,
+		id, Name)
+	return err
+}
+
+func (s *service) StoreGameHistory(gameID, players, result string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO game_history (game_id, players, start_time, end_time, result) VALUES (?, ?, datetime('now'), datetime('now'), ?)`,
+		gameID, players, result)
+	return err
+}
+
 func (s *service) Close() error {
-	log.Printf("Disconnected from database: %s", database)
+	log.Printf("Disconnected from database: %s", dburl)
 	return s.db.Close()
 }

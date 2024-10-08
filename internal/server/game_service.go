@@ -14,12 +14,13 @@ import (
 
 type Player struct {
 	Conn       *websocket.Conn
-	id         string
+	ID         string
 	LastActive time.Time
+	Name       string
 }
 
 type Game struct {
-	id        string
+	ID        string
 	Players   []*Player
 	Ticker    *time.Ticker
 	StopChan  chan struct{}
@@ -44,9 +45,9 @@ func (s *Server) PlayerConnect(w http.ResponseWriter, r *http.Request) {
 		log.Println("Error upgrading connection: ", err)
 		return
 	}
-	player := &Player{Conn: ws, id: uuid.New().String()}
+	player := &Player{Conn: ws, ID: uuid.New().String()}
 	playerQueue <- player
-	log.Printf("Player %s connected", player.id)
+	log.Printf("Player %s connected", player.ID)
 
 	go func() {
 		for {
@@ -83,7 +84,7 @@ func StartMatch(players []*Player) {
 	ticker := time.NewTicker(16 * time.Millisecond)
 
 	game := &Game{
-		id:       gameId,
+		ID:       gameId,
 		Players:  players,
 		Ticker:   ticker,
 		StopChan: stopChan,
@@ -101,7 +102,7 @@ func StartMatch(players []*Player) {
 			"message": "Game has started",
 		})
 		if err != nil {
-			log.Printf("Error sending game Id to player %s: %v", player.id, err)
+			log.Printf("Error sending game Id to player %s: %v", player.ID, err)
 			player.Conn.Close()
 		}
 	}
@@ -118,7 +119,7 @@ func checkPlayerInactivity(players []*Player, stopChan chan struct{}) {
 			mu.Lock()
 			for _, player := range players {
 				if time.Since(player.LastActive) > inactivityTimeout {
-					log.Printf("Player %s is inactive, disconnecting...", player.id)
+					log.Printf("Player %s is inactive, disconnecting...", player.ID)
 					player.Conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Disconnected due to inactivity"))
 					player.Conn.Close()
 				}
@@ -134,7 +135,7 @@ func gameTickerLoop(game *Game, ticker *time.Ticker, stopChan chan struct{}) {
 	for {
 		select {
 		case <-ticker.C:
-			game.GameState = getGameState(game.id)
+			game.GameState = getGameState(game.ID)
 			for _, player := range game.Players {
 				err := player.Conn.WriteJSON(game.GameState)
 				if err != nil {
@@ -142,7 +143,7 @@ func gameTickerLoop(game *Game, ticker *time.Ticker, stopChan chan struct{}) {
 				}
 			}
 		case <-stopChan:
-			log.Printf("Closing game %s", game.id)
+			log.Printf("Closing game %s", game.ID)
 			for _, player := range game.Players {
 				player.Conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Game over"))
 				player.Conn.Close()
@@ -207,4 +208,20 @@ func jsonResponse(w http.ResponseWriter, data interface{}, status int) {
 	if err := json.NewEncoder(w).Encode(data); err != nil {
 		log.Printf("Error encoding JSON response: %v", err)
 	}
+}
+
+func (s *Server) CreatePlayerHandler(w http.ResponseWriter, r *http.Request) {
+	var player Player
+	err := json.NewDecoder(r.Body).Decode(&player)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.db.StorePlayer(player.ID, player.Name)
+	response := map[string]string{
+		"message":  "PLayer created successfully",
+		"playerId": player.ID,
+	}
+	jsonResponse(w, response, http.StatusCreated)
+
 }
