@@ -40,12 +40,17 @@ var upgrader = websocket.Upgrader{
 }
 
 func (s *Server) PlayerConnect(w http.ResponseWriter, r *http.Request) {
+	userId := r.URL.Query().Get("ID")
+	if userId == "" {
+		http.Error(w, "Missing userId", http.StatusBadRequest)
+		return
+	}
 	ws, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println("Error upgrading connection: ", err)
 		return
 	}
-	player := &Player{Conn: ws, ID: uuid.New().String()}
+	player := &Player{Conn: ws, ID: userId}
 	playerQueue <- player
 	log.Printf("Player %s connected", player.ID)
 
