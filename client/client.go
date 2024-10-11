@@ -2,13 +2,12 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"net/url"
-	"os"
-	"os/signal"
 	"sync"
 	"time"
 
@@ -21,12 +20,15 @@ func main() {
 	playerCount := 10
 	var wg sync.WaitGroup
 	wg.Add(playerCount)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	go func() {
 		time.Sleep(3 * time.Second)
 		log.Println("Closing game...")
 		if gameId != "" {
-			closeGame(gameId)
+			closeGame(gameId, cancel)
+			closeAllPLayerWS(cancel)
 		} else {
 			log.Println("No gameID received yet")
 		}
@@ -35,17 +37,14 @@ func main() {
 	for i := 0; i < playerCount; i++ {
 		go func(ID string) {
 			defer wg.Done()
-			simulatePlayer(ID)
+			simulatePlayer(ID, ctx)
 		}(userIDs[i])
 	}
 
 	wg.Wait()
 }
 
-func simulatePlayer(ID string) {
-	interrupt := make(chan os.Signal, 1)
-	signal.Notify(interrupt, os.Interrupt)
-
+func simulatePlayer(ID string, ctx context.Context) {
 	u := url.URL{Scheme: "ws", Host: "localhost:8080", Path: "/ws", RawQuery: fmt.Sprintf("ID=%s", ID)}
 	log.Printf("Connecting to %s", u.String())
 
@@ -55,31 +54,33 @@ func simulatePlayer(ID string) {
 	}
 	defer conn.Close()
 
-	done := make(chan struct{})
-
 	go func() {
-		defer close(done)
 		for {
-			_, message, err := conn.ReadMessage()
-			if err != nil {
-				log.Printf("Read: %s", err)
+			select {
+			case <-ctx.Done():
+				log.Printf("Player %s: Game is closing, disconnecting...", ID)
+				conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 				return
+			default:
+				messageType, message, err := conn.ReadMessage()
+				if err != nil {
+					log.Printf("Player %s Read error: %v", ID, err)
+					return
+				}
+				if messageType == websocket.CloseMessage {
+					log.Printf("Player %s: Received close message from server", ID)
+					return
+				}
+				var msg map[string]interface{}
+				if err := json.Unmarshal(message, &msg); err != nil {
+					log.Printf("Error decoding JSON: %v", err)
+					continue
+				}
+				if id, ok := msg["gameId"].(string); ok {
+					gameId = id
+					log.Printf("Received gameId: %s", gameId)
+				}
 			}
-
-			var msg map[string]interface{}
-			if err := json.Unmarshal(message, &msg); err != nil {
-				log.Printf("Error decoding JSON: %v", err)
-				log.Printf("Received raw message: %s", string(message))
-				continue
-			}
-
-			if id, ok := msg["gameId"].(string); ok {
-				gameId = id
-				log.Printf("Received gameId: %s", gameId)
-
-			} //else {
-			// log.Printf("Received: %s", message)
-			//}
 		}
 	}()
 
@@ -88,6 +89,10 @@ func simulatePlayer(ID string) {
 
 	for {
 		select {
+		case <-ctx.Done():
+			log.Printf("Player %s: game stopped", ID)
+			ticker.Stop()
+			return
 		case t := <-ticker.C:
 			msg := map[string]string{
 				"timestamp": t.String(),
@@ -97,29 +102,20 @@ func simulatePlayer(ID string) {
 
 			err := conn.WriteJSON(msg)
 			if err != nil {
-				log.Printf("Write: %s", err)
+				log.Printf("Player %s Write Error: %s", ID, err)
 				return
 			}
 			log.Printf("Sent: %v", msg)
-
-		case <-interrupt:
-			log.Printf("Interrupt received, closing connection.")
-
-			err := conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-			if err != nil {
-				log.Printf("Close: %s", err)
-				return
-			}
-			select {
-			case <-done:
-			case <-time.After(time.Second):
-			}
-			return
 		}
 	}
 }
 
-func closeGame(gameID string) {
+func closeAllPLayerWS(cancel context.CancelFunc) {
+	log.Println("Closing all players' WS connectins")
+	cancel()
+}
+
+func closeGame(gameID string, cancel context.CancelFunc) {
 	apiURL := "http://localhost:8080/close-game/" + gameID
 	requestBody, err := json.Marshal(map[string]string{
 		"gameID": gameID,
@@ -151,8 +147,10 @@ func closeGame(gameID string) {
 	} else {
 		log.Printf("Failed to close game %s: Status %d", gameID, resp.StatusCode)
 	}
+	cancel()
 }
 
+// player ids stored in localdb
 var userIDs = []string{
 	"5fe401cf-e58b-4481-bf21-536cbdfb955b",
 	"4e2b03b2-6999-44ba-b62d-5b186d4a4b43",
