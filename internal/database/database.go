@@ -18,6 +18,8 @@ type Service interface {
 	Close() error
 	StorePlayer(playerId, playerName string) error
 	StoreGameHistory(gameId, players, result string) error
+	UpdateGameResult(gameId, result string) error
+	GetPlayerGames(playerId string) ([]map[string]interface{}, error)
 }
 
 type service struct {
@@ -133,12 +135,44 @@ func (s *service) StorePlayer(id string, Name string) error {
 
 func (s *service) StoreGameHistory(gameID, players, result string) error {
 	_, err := s.db.Exec(
-		`INSERT INTO game_history (game_id, players, start_time, end_time, result) VALUES (?, ?, datetime('now'), datetime('now'), ?)`,
+		`INSERT INTO game_history (game_id, players, start_time, end_time, result) VALUES (?, ?, datetime('now'), NULL, ?)`,
 		gameID, players, result)
+	return err
+}
+
+func (s *service) UpdateGameResult(gameID, result string) error {
+	_, err := s.db.Exec(
+		`UPDATE game_history SET end_time = datetime('now'), result = ? WHERE game_id = ?`,
+		result, gameID)
 	return err
 }
 
 func (s *service) Close() error {
 	log.Printf("Disconnected from database: %s", dburl)
 	return s.db.Close()
+}
+
+func (s *service) GetPlayerGames(playerId string) ([]map[string]interface{}, error) {
+	rows, err := s.db.Query(`SELECT game_id, start_time, end_time, result FROM game_history WHERE players LIKE '%' || ? || '%'`, playerId)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var games []map[string]interface{}
+	for rows.Next() {
+		var gameId, startTime, endTime, result string
+		if err := rows.Scan(&gameId, &startTime, &endTime, &result); err != nil {
+			return nil, err
+		}
+		game := map[string]interface{}{
+			"gameId":    gameId,
+			"startTime": startTime,
+			"endTime":   endTime,
+			"result":    result,
+		}
+		games = append(games, game)
+	}
+
+	return games, nil
 }

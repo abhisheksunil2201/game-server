@@ -4,15 +4,18 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/google/uuid"
 	"log"
 	"math/rand"
 	"net/http"
+	"time"
+
+	"github.com/google/uuid"
 )
 
 type Player struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	LastActive time.Time
 }
 
 var (

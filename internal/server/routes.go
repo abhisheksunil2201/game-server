@@ -9,10 +9,10 @@ func (s *Server) RegisterRoutes() http.Handler {
 	r := mux.NewRouter()
 	r.HandleFunc("/", s.helloHandler)
 	r.HandleFunc("/ws", s.PlayerConnect)
-	r.HandleFunc("/close-game/{gameId}", CloseGameHandler).Methods("POST")
+	r.HandleFunc("/close-game/{gameId}", s.CloseGameHandler).Methods("POST")
 	r.HandleFunc("/create-player", s.CreatePlayerHandler).Methods("POST")
 
-	go Matchmaking()
+	go s.Matchmaking()
 
 	return r
 }

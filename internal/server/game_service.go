@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,8 +42,24 @@ var upgrader = websocket.Upgrader{
 
 func (s *Server) PlayerConnect(w http.ResponseWriter, r *http.Request) {
 	userId := r.URL.Query().Get("ID")
+	lastActiveStr := r.URL.Query().Get("LastActive")
+	name := r.URL.Query().Get("Name")
 	if userId == "" {
 		http.Error(w, "Missing userId", http.StatusBadRequest)
+		return
+	}
+	if name == "" {
+		http.Error(w, "Missing name", http.StatusBadRequest)
+		return
+	}
+	if lastActiveStr == "" {
+		http.Error(w, "Missing lastActive", http.StatusBadRequest)
+		return
+	}
+	lastActive, err := time.Parse(time.RFC3339, lastActiveStr)
+	if err != nil {
+		log.Printf("Error parsing LastActive: %v", err)
+		http.Error(w, "Invalid LastActive timestamp", http.StatusBadRequest)
 		return
 	}
 	ws, err := upgrader.Upgrade(w, r, nil)
@@ -50,9 +67,9 @@ func (s *Server) PlayerConnect(w http.ResponseWriter, r *http.Request) {
 		log.Println("Error upgrading connection: ", err)
 		return
 	}
-	player := &Player{Conn: ws, ID: userId}
+	player := &Player{Conn: ws, ID: userId, Name: name, LastActive: lastActive}
 	playerQueue <- player
-	log.Printf("Player %s connected", player.ID)
+	log.Printf("Player %s %s connected", player.ID, player.Name)
 
 	go func() {
 		for {
@@ -68,7 +85,7 @@ func (s *Server) PlayerConnect(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
-func Matchmaking() {
+func (s *Server) Matchmaking() {
 	log.Println("********* Matchmaking active *********")
 
 	for {
@@ -77,17 +94,26 @@ func Matchmaking() {
 			for i := 0; i < 6; i++ {
 				players[i] = <-playerQueue
 			}
-			go StartMatch(players)
+			go s.StartMatch(players)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 }
 
-func StartMatch(players []*Player) {
+func (s *Server) StartMatch(players []*Player) {
 	gameId := uuid.New().String()
 	stopChan := make(chan struct{})
 	ticker := time.NewTicker(16 * time.Millisecond)
-
+	playerNames := []string{}
+	for _, player := range players {
+		playerNames = append(playerNames, player.Name)
+	}
+	// Add game to the game_history table when the game starts
+	playersStr := strings.Join(playerNames, ",")
+	err := s.db.StoreGameHistory(gameId, playersStr, "in-progress")
+	if err != nil {
+		log.Printf("Error storing game history: %v", err)
+	}
 	game := &Game{
 		ID:       gameId,
 		Players:  players,
@@ -113,7 +139,7 @@ func StartMatch(players []*Player) {
 	}
 
 	go checkPlayerInactivity(players, game.StopChan)
-	go gameTickerLoop(game, ticker, stopChan)
+	go gameTickerLoop(game, ticker, game.StopChan)
 }
 
 func checkPlayerInactivity(players []*Player, stopChan chan struct{}) {
@@ -159,7 +185,7 @@ func gameTickerLoop(game *Game, ticker *time.Ticker, stopChan chan struct{}) {
 	}
 }
 
-func CloseGameHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) CloseGameHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	gameId := vars["gameId"]
 
@@ -172,7 +198,7 @@ func CloseGameHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	CloseGame(gameId)
+	s.CloseGame(gameId)
 
 	response := map[string]string{
 		"message": "Game closed successfully",
@@ -181,17 +207,21 @@ func CloseGameHandler(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, response, http.StatusOK)
 }
 
-func CloseGame(gameId string) {
+func (s *Server) CloseGame(gameId string) {
 	mu.Lock()
 	game, exists := activeGames[gameId]
 
-	for _, player := range game.Players {
-		player.Conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Game over"))
-		player.Conn.Close()
-	}
-
 	if exists {
+		for _, player := range game.Players {
+			player.Conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Game over"))
+			player.Conn.Close()
+		}
 		close(game.StopChan)
+		// Update game result and end time in the game_history table
+		err := s.db.UpdateGameResult(gameId, "finished")
+		if err != nil {
+			log.Printf("Error updating game result: %v", err)
+		}
 		delete(activeGames, gameId)
 		log.Printf("Game %s has been closed", gameId)
 	}
@@ -229,4 +259,20 @@ func (s *Server) CreatePlayerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	jsonResponse(w, response, http.StatusCreated)
 
+}
+
+func (s *Server) GetPlayerGameHistory(w http.ResponseWriter, r *http.Request) {
+	playerId := r.URL.Query().Get("playerId")
+	if playerId == "" {
+		http.Error(w, "Missing playerId", http.StatusBadRequest)
+		return
+	}
+
+	games, err := s.db.GetPlayerGames(playerId)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	jsonResponse(w, games, http.StatusOK)
 }
